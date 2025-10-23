@@ -1,0 +1,64 @@
+Phase 1:
+
+cd /root/EasyR1
+
+MODEL_PATH=$(find /root/autodl-tmp/models -name "Qwen2-VL-2B-Instruct" -type d | head -1)
+
+export LD_LIBRARY_PATH=/root/miniconda3/lib:$LD_LIBRARY_PATH
+export CUDA_VISIBLE_DEVICES=0,1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+echo "="*80
+echo "重新启动训练（奖励函数已修复）"
+echo "="*80
+
+python3 -m verl.trainer.main \
+    config=examples/caption_grpo_config_2gpu.yaml \
+    worker.actor.model.model_path=${MODEL_PATH} \
+    worker.rollout.gpu_memory_utilization=0.7 \
+    data.rollout_batch_size=32 \
+    worker.actor.global_batch_size=16 \
+    trainer.logger='["file"]' \
+    2>&1 | tee training_2x3090_final.log
+
+phase 2:
+
+cd /root/EasyR1
+
+POLICY_MODEL=$(find /root/autodl-tmp/models -name "Qwen2-VL-2B-Instruct" -type d | head -1)
+
+export LD_LIBRARY_PATH=/root/miniconda3/lib:$LD_LIBRARY_PATH
+export CUDA_VISIBLE_DEVICES=0,1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+echo "="*80
+echo "第二阶段训练配置（智能模型选择）："
+echo "  Policy Model (训练):  原始模型"
+echo "  Reward Model (评分):  自动选择最佳可用模型"
+echo "    - 有第一阶段检查点 → 使用训练好的模型"
+echo "    - 没有检查点 → 使用原始模型"
+echo "="*80
+
+python3 -m verl.trainer.main \
+    config=examples/caption_grpo_config_2gpu_stage2.yaml \
+    worker.actor.model.model_path=${POLICY_MODEL} \
+    worker.rollout.gpu_memory_utilization=0.7 \
+    data.rollout_batch_size=32 \
+    worker.actor.global_batch_size=16 \
+    trainer.load_checkpoint_path=null \
+    worker.reward.reward_function=./examples/reward_function/self_eval_reward_lazy.py:compute_score \
+    2>&1 | tee training_stage2_smart.log
+```
+
+## 验证逻辑
+
+第一次运行时（没有检查点）：
+```
+[奖励函数] ✓ 使用原始模型: /root/autodl-tmp/models/Qwen/Qwen2-VL-2B-Instruct
+```
+
+如果有第一阶段的检查点：
+```
+[奖励函数] ✓ 使用第一阶段训练好的模型: .../epoch_2/actor
